@@ -1,0 +1,24 @@
+In the code I shared earlier, we are using **GPT-2**, which is a small, lightweight language model from OpenAI. It is part of the Hugging Face model hub and can be easily loaded via the **`transformers`** library.
+
+### Key Characteristics of GPT-2:
+- **Model Type:** Autoregressive language model.
+- **Size:** It comes in several sizes, with the smaller ones (e.g., `gpt2`) being suitable for tasks that don't require heavy computation.
+- **Use Case:** GPT-2 is commonly used for text generation tasks like answering questions, completing sentences, and generating responses.
+
+### Code Snippet (Loading GPT-2):
+In the tutoring server code, the model is loaded with the following line:
+```python
+model = pipeline('text-generation', model='gpt2')
+```
+
+### Why GPT-2?
+- **Lightweight:** GPT-2 is relatively small compared to models like GPT-3, making it suitable for tasks that need to run on limited resources, such as in your distributed system.
+- **CPU-friendly:** GPT-2 can be run on CPUs (no GPU required), making it easier to integrate in environments with limited computational power.
+- **Pre-trained for General Text Generation:** GPT-2 is trained on large datasets for general text generation, so it can answer common questions in a conversational style.
+
+### Alternatives:
+If GPT-2 is too resource-intensive or not quite what you need, you could consider using lighter alternatives like:
+- **`distilGPT2`:** A distilled (smaller, faster) version of GPT-2.
+- **spaCy or NLTK:** These libraries are more lightweight and can be used for simpler natural language processing tasks like rule-based responses.
+
+Let me know if you want to explore other models or need help customizing this setup!
