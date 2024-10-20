@@ -12,15 +12,15 @@ users = {
     "instructor": "instructor_pass"
 }
 
-
 # Raft node states
 FOLLOWER = 0
 CANDIDATE = 1
 LEADER = 2
 
 # Raft timeout constants
-ELECTION_TIMEOUT = random.uniform(7,8)  # Election timeout range
-HEARTBEAT_INTERVAL = 5  # Leader heartbeat interval
+MIN_ELECTION_TIMEOUT = 10  # Minimum election timeout in seconds
+MAX_ELECTION_TIMEOUT = 20  # Maximum election timeout in seconds
+HEARTBEAT_INTERVAL = 5  # Leader heartbeat interval in seconds
 
 class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
     def __init__(self, node_id, port):
@@ -63,7 +63,6 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         if request.username in users and users[request.username] == request.password:
             token = f"token-{time.time()}"  # Generate a simple token
             self.sessions[token] = request.username
-            # return lms_pb2.LoginResponse(success=True, token=token, )
             # Now replicate this token to all the followers
             success = self.replicate_session_to_followers(token, request.username)
             if success:
@@ -94,26 +93,17 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             log_entry = {'term': self.current_term, 'type': request.type, 'data': request.data}
             self.log.append(log_entry)
             print(self.log)
-            # Send AppendEntries RPC to all followers
-            # success = self.replicate_to_followers(log_entry)
-            # if success:
-            if True:
-                # After log replication, send the data_store update
-                if self.replicate_data_store_to_followers(request.type, self.data_store[request.type]):
-                    return lms_pb2.StatusResponse(success=True, message="Post replicated and committed")
-                else:
-                    return lms_pb2.StatusResponse(success=False, message="Log replicated but failed to replicate data store")
-                return lms_pb2.StatusResponse(success=True, message="Post replicated and commited")
+            # After log replication, send the data_store update
+            if self.replicate_data_store_to_followers(request.type, self.data_store[request.type]):
+                return lms_pb2.StatusResponse(success=True, message="Post replicated and committed")
             else:
-                print("Failed")
-                return lms_pb2.StatusResponse(success=False, message="Failed to replicate log to majority")
+                return lms_pb2.StatusResponse(success=False, message="Log replicated but failed to replicate data store")
         return lms_pb2.StatusResponse(success=False, message="Invalid token")
 
     def Get(self, request, context):
         """Handle getting data."""
         if request.token in self.sessions:
             data = self.data_store.get(request.type, [])
-           # data = self.log[self.get_last_log_index()].get(request.type,[])
             data_items = [lms_pb2.DataItem(type_id=str(i), data=item) for i, item in enumerate(data)]
             return lms_pb2.GetResponse(data=data_items)
         return lms_pb2.GetResponse(data=[])
@@ -122,10 +112,13 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
     def reset_election_timer(self):
         """Reset election timer and convert to candidate if timeout occurs."""
-        print(f"Node {self.node_id} resetting election timer.")
         if self.election_timer:
             self.election_timer.cancel()
-        self.election_timer = threading.Timer(ELECTION_TIMEOUT, self.start_election)
+
+        # Randomize election timeout for staggered elections
+        timeout = random.uniform(MIN_ELECTION_TIMEOUT, MAX_ELECTION_TIMEOUT)
+        print(f"Node {self.node_id} resetting election timer with timeout {timeout} seconds.")
+        self.election_timer = threading.Timer(timeout, self.start_election)
         self.election_timer.start()
 
     def start_election(self):
@@ -147,6 +140,9 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 )
                 self.send_request_vote(port, request_vote_request)
 
+        # If no majority votes are received, restart the election timer
+        self.reset_election_timer()
+
     def send_request_vote(self, port, request_vote_request):
         """Send RequestVote RPC to another node."""
         try:
@@ -156,9 +152,8 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             response = stub.RequestVote(request_vote_request)
             print(f"Node {self.node_id} received response from port {port}")
             self.handle_vote_response(response)
-        except Exception as e:
+        except grpc.RpcError as e:
             print(f"Error sending RequestVote to port {port}: {e}")
-            # print(f"Node unreachable at port {port}")
 
     def handle_vote_response(self, response):
         """Handle response to a vote request."""
@@ -213,9 +208,8 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
             response = stub.AppendEntries(append_entries_request)
             self.handle_append_entries_response(response)
-        except Exception as e:
+        except grpc.RpcError as e:
             print(f"Error sending AppendEntries to {port}: {e}")
-            # print(f"Node unreachable at port {port}")
 
     def handle_append_entries_response(self, response):
         """Handle response to an AppendEntries RPC."""
@@ -239,140 +233,57 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
     def AppendEntries(self, request, context):
         """Handle AppendEntries (heartbeat or log replication) RPC."""
-            # Check if the term in the request is valid
         if request.term < self.current_term:
             return lms_pb2.AppendEntriesReply(term=self.current_term, success=False)
-        
+
         self.current_term = request.term
         self.leader_id = request.leaderId
         self.reset_election_timer()  # Reset election timer since we've heard from the leader
         print(f"Node {self.node_id} received heartbeat from leader {self.leader_id}.")
-    
-        # Append the log entry to the follower's log
-        if request.entries:
-            self.log.append(request.entries[0])  # Assume single entry for simplicity
 
-            # Update the follower's data_store based on the received log entry
-            if request.data_type not in self.data_store:
-                self.data_store[request.data_type] = []
-        
-            # Append the data received from the leader to the follower's data_store
-            self.data_store[request.data_type].append(request.data)
-    
-        # Update the commit index on the follower
-        if request.leaderCommit > self.commit_index:
-            self.commit_index = min(request.leaderCommit, len(self.log) - 1)
-    
         # Respond with success
         return lms_pb2.AppendEntriesReply(term=self.current_term, success=True)
 
-
-        # if request.term < self.current_term:
-        #     return lms_pb2.AppendEntriesReply(term=self.current_term, success=False)
-        # self.current_term = request.term
-        # self.leader_id = request.leaderId
-        # self.reset_election_timer()  # Reset election timer since we've heard from the leader
-        # print(f"Node {self.node_id} received heartbeat from leader {self.leader_id}.")
-        
-        # if len(request.entries) > 0:
-        #     for entry in request.entries:
-        #         self.log.append(entry)
-        #     # Acknowledge successful replication
-        #     return lms_pb2.AppendEntriesReply(term=self.current_term, success=True)
-        # return lms_pb2.AppendEntriesReply(term=self.current_term, success=True)
-
-
-        # if request.prevLogIndex == -1 or request.prevLogIndex >= len(self.log):
-        # # Handle case where follower has an empty log or insufficient log entries
-        #     return lms_pb2.AppendEntriesReply(term=self.current_term, success=True)
-
-        # if request.term < self.current_term:
-        #     return lms_pb2.AppendEntriesReply(term=self.current_term, success=False)
-
-        # # If log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm, reject
-        # if request.prevLogIndex >= len(self.log):
-        #     print(f"Follower log too short: prevLogIndex = {request.prevLogIndex}, log length = {len(self.log)}")
-        #     return lms_pb2.AppendEntriesReply(term=self.current_term, success=False)
-        
-        # if request.prevLogIndex >= 0 and self.log[request.prevLogIndex]['term'] != request.prevLogTerm:
-        #     # The term at prevLogIndex does not match, reject the append
-        #     return lms_pb2.AppendEntriesReply(term=self.current_term, success=False)
-
-        # # Append any new entries not already in the log
-        # if len(request.entries) > 0:
-        #     self.log = self.log[:request.prevLogIndex + 1]  # Delete conflicting entries
-        #     self.log.extend(request.entries)  # Append the new entries
-
-        # # Update commit index
-        # if request.leaderCommit > self.commit_index:
-        #     self.commit_index = min(request.leaderCommit, len(self.log) - 1)
-
-        # return lms_pb2.AppendEntriesReply(term=self.current_term, success=True)
-    
     def replicate_to_followers(self, log_entry):
+        """Replicate log entry to followers."""
         success_count = 0
-        follower_addresses = []
         for node, port in self.node_ports.items():
             if node != self.node_id:
-                follower_addresses.append("localhost:"+port)
-        for follower in follower_addresses:
-            try:
-                # Create a gRPC stub for the follower
-                channel = grpc.insecure_channel(follower)
-                stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+                try:
+                    channel = grpc.insecure_channel(f"localhost:{port}")
+                    stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+                    response = stub.AppendEntries(
+                        lms_pb2.AppendEntriesRequest(
+                            leaderId=self.node_id,
+                            term=self.current_term,
+                            prevLogIndex=self.get_last_log_index(),
+                            prevLogTerm=self.get_last_log_term(),
+                            entries=[log_entry],
+                            leaderCommit=self.commit_index
+                        )
+                    )
+                    if response.success:
+                        success_count += 1
+                except Exception as e:
+                    print(f"Error replicating to follower {node}: {e}")
 
-                # Get the data that needs to be replicated from the leader's data_store
-                data_type = log_entry['type']
-                data = log_entry['data']
-                
-                # Send the AppendEntries RPC to replicate the log entry and the data store update
-                response = stub.AppendEntries(lms_pb2.AppendEntriesRequest(
-                    leaderId=self.leader_id,
-                    term=self.current_term,
-                    prevLogIndex=self.get_last_log_index(),
-                    prevLogTerm=self.get_last_log_term(),
-                    entries=[log_entry],  # Sending the new log entry to the follower
-                    leaderCommit=self.commit_index,
-                    # Adding the data_store update to the AppendEntriesRequest
-                    data_type=data_type,
-                    data=data
-            ))
-                
-                if response.success:
-                    success_count += 1
-                else:
-                    print(f"Replication failed to {follower} with term {response.term}")
+        return success_count >= (len(self.node_ports) // 2)
 
-            except grpc.RpcError as e:
-                print(f"Failed to replicate to follower {follower}: {e}")
-            
+    def get_last_log_index(self):
+        return len(self.log) - 1 if self.log else 0
 
-        # Return True if the majority of followers replicated the entry
-        # If the majority of followers successfully replicated the log entry, commit it
-        if success_count >= self.get_majority_count():
-            self.commit_log_entry(log_entry)  # <-- Call commit_log_entry here
-            return True
-        
-        return False
-    
-    def commit_log_entry(self, log_entry):
-        # Increment the commit index
-        self.commit_index += 1
-        # Mark the log entry as committed
-        if log_entry['type'] not in self.data_store:
-            self.data_store[log_entry['type']] = []
-        self.data_store[log_entry['type']].append(log_entry['data'])
-        print(f"Committed log entry: {log_entry}")
-        # log_entry['committed'] = True
-        # print(f"Log entry committed: {log_entry}")
-    
+    def get_last_log_term(self):
+        return self.log[-1]['term'] if self.log else self.current_term
+
     def GetLeader(self, request, context):
         """Respond with whether this node is the leader, and the leader's ID."""
         if self.state == LEADER:
             return lms_pb2.GetLeaderReply(isLeader=True, leaderId=self.node_id)
         else:
             return lms_pb2.GetLeaderReply(isLeader=False, leaderId=self.leader_id if self.leader_id else "")
-    
+
+
+
     def get_last_log_index(self):
         # If log is empty, return 0 (no log entries yet)
         if len(self.log) == 0:
@@ -470,11 +381,8 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         print(self.data_store)
     
         return lms_pb2.StatusResponse(success=True, message="Data store replicated successfully")
-
-
-
-
-
+    
+    
 def serve(node_id, port):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     lms_pb2_grpc.add_LMSRaftServiceServicer_to_server(LMSRaftServiceServicer(node_id, port), server)
