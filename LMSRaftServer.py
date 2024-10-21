@@ -18,9 +18,9 @@ CANDIDATE = 1
 LEADER = 2
 
 # Raft timeout constants
-MIN_ELECTION_TIMEOUT = 10  # Minimum election timeout in seconds
+MIN_ELECTION_TIMEOUT = 10 # Minimum election timeout in seconds
 MAX_ELECTION_TIMEOUT = 20  # Maximum election timeout in seconds
-HEARTBEAT_INTERVAL = 5  # Leader heartbeat interval in seconds
+HEARTBEAT_INTERVAL = 2  # Leader heartbeat interval in seconds
 
 class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
     def __init__(self, node_id, port):
@@ -128,10 +128,15 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         self.current_term += 1
         self.voted_for = self.node_id
         self.votes_received = 1  # Vote for self
+        active_nodes = self.get_active_nodes()
+
+        if active_nodes == 1:
+            self.state = LEADER
+            self.become_leader()
 
         # Send RequestVote RPCs to all other nodes
         for node, port in self.node_ports.items():
-            if node != self.node_id:
+            if node != self.node_id and active_nodes > 1:
                 request_vote_request = lms_pb2.RequestVoteRequest(
                     candidateId=self.node_id,
                     term=self.current_term,
@@ -153,7 +158,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             print(f"Node {self.node_id} received response from port {port}")
             self.handle_vote_response(response)
         except grpc.RpcError as e:
-            print(f"Error sending RequestVote to port {port}: {e}")
+            print(f"Error sending RequestVote to port {port}")
 
     def handle_vote_response(self, response):
         """Handle response to a vote request."""
@@ -167,7 +172,8 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         if self.state == CANDIDATE and response.voteGranted:
             self.votes_received += 1
             print(f"Node {self.node_id} received a vote. Total votes: {self.votes_received}")
-            if self.votes_received > (len(self.node_ports) // 2):
+
+            if self.votes_received > (self.get_active_nodes() // 2):
                 self.become_leader()
 
     def become_leader(self):
@@ -198,7 +204,14 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                         entries=[],  # Heartbeat does not include log entries
                         leaderCommit=self.commit_index
                     )
-                    self.send_append_entries(node, port, append_entries_request)
+                    if self.get_active_nodes() > 1:
+                        self.send_append_entries(node, port, append_entries_request)
+
+            # Replicate data store during heartbeats
+
+            for data_type, data_list in self.data_store.items():
+                self.replicate_data_store_to_followers(data_type, data_list)
+
             self.reset_heartbeat_timer()
 
     def send_append_entries(self, node, port, append_entries_request):
@@ -209,7 +222,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             response = stub.AppendEntries(append_entries_request)
             self.handle_append_entries_response(response)
         except grpc.RpcError as e:
-            print(f"Error sending AppendEntries to {port}: {e}")
+            print(f"Error sending AppendEntries to {port}")
 
     def handle_append_entries_response(self, response):
         """Handle response to an AppendEntries RPC."""
@@ -265,9 +278,9 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                     if response.success:
                         success_count += 1
                 except Exception as e:
-                    print(f"Error replicating to follower {node}: {e}")
+                    print(f"Error replicating to follower {node}")
 
-        return success_count >= (len(self.node_ports) // 2)
+        return success_count >= (self.get_active_nodes() // 2)
 
     def get_last_log_index(self):
         return len(self.log) - 1 if self.log else 0
@@ -282,21 +295,15 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         else:
             return lms_pb2.GetLeaderReply(isLeader=False, leaderId=self.leader_id if self.leader_id else "")
 
-
-
     def get_last_log_index(self):
-        # If log is empty, return 0 (no log entries yet)
         if len(self.log) == 0:
             return 0
-        # The last index is simply the length of the log, since log indices are 1-based
         return len(self.log) - 1
     
     def get_last_log_term(self):
-        # If log is empty, return current term (or a default term, e.g., 0)
         if len(self.log) == 0:
-            return self.current_term  # Return the current term if no log entries
-        # Return the term of the last log entry
-        return self.log[-1]['term']  # Assuming log entries are stored as dicts with 'term' and 'data'
+            return self.current_term
+        return self.log[-1]['term']
     
     def replicate_session_to_followers(self, token, username):
         """Replicate session (token, username) to all followers."""
@@ -319,23 +326,14 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 if response.success:
                     success_count += 1
             except grpc.RpcError as e:
-                print(f"Failed to replicate session to follower {follower}: {e}")
+                print(f"Failed to replicate session to follower {follower}")
     
         # Return True if a majority of followers successfully replicated the session
+        if(self.get_majority_count() == 1):
+            return True
         return success_count >= self.get_majority_count()
-    
-    def AddSession(self, request, context):
-        """Add session (token and username) received from the leader."""
-        # Replicate the session locally on the follower
-        self.sessions[request.token] = request.username
-        print(f"Token {request.token} added. User {request.username} logged in")
-        return lms_pb2.StatusResponse(success=True)
-    
-    def get_majority_count(self):
-        """Calculate and return the majority count of the nodes in the cluster."""
-        total_nodes = len(self.node_ports)  # `node_ports` should contain all the nodes in the cluster
-        return (total_nodes // 2) + 1  # Majority is half the nodes + 1
-    
+
+
     def replicate_data_store_to_followers(self, data_type, data_list):
         """Replicate the data_store to all followers after log replication."""
         success_count = 0
@@ -357,32 +355,64 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                         leaderId=self.leader_id,
                         type=data_type,
                         data=data_list  # Send the full list of data for the given type
-                    ))
+                    ), timeout = 1)
             
                     if response.success:
                         success_count += 1
                     else:
-                        print(f"Data replication failed to {follower} with message: {response.message}")
+                        print(f"Data replication failed to {follower}")
 
                 except grpc.RpcError as e:
-                    print(f"Failed to replicate data store to follower {follower}: {e}")
+                    print(f"Failed to replicate data store to follower {follower}")
     
         # Check if the majority of followers replicated the data_store
+        if(self.get_majority_count() == 1):
+            return True
         return success_count >= self.get_majority_count()
+
+    
+    def AddSession(self, request, context):
+        """Add session (token and username) received from the leader."""
+        self.sessions[request.token] = request.username
+        print(f"Token {request.token} added. User {request.username} logged in")
+        return lms_pb2.StatusResponse(success=True)
+    
+    def get_majority_count(self):
+        # total_nodes = len(self.node_ports)
+        total_nodes = self.get_active_nodes()
+        return (total_nodes // 2) + 1
+    
+
+    def get_active_nodes(self):
+        active_nodes = 0
+        
+        for node, port in self.node_ports.items():
+            try:
+                # Try to establish a connection to the node
+                channel = grpc.insecure_channel(f"localhost:{port}")
+                stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+                
+                # You can use any lightweight RPC method to test if the node is alive, like GetLeader
+                response = stub.GetLeader(lms_pb2.GetLeaderRequest())
+                
+                # If we receive a response, consider the node active
+                if response:
+                    active_nodes += 1
+            except grpc.RpcError as e:
+                # Node is not available, log the error and continue
+                print(f"Node {node} is down or not responding")
+        print(f"Number of Current Active nodes: {active_nodes}")
+        return active_nodes
+
+    
     
     def ReplicateDataStore(self, request, context):
-        """Handle replication of data store from the leader."""
         if request.type not in self.data_store:
             self.data_store[request.type] = []
-    
-        # Update the data_store with the data received from the leader
-        self.data_store[request.type] = list(request.data)  # Replace with the leader's version of the data
-
-        print(self.data_store)
-    
+        self.data_store[request.type] = list(request.data)
+        print(f"Follower {self.node_id} updated data store: {self.data_store}")
         return lms_pb2.StatusResponse(success=True, message="Data store replicated successfully")
-    
-    
+
 def serve(node_id, port):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     lms_pb2_grpc.add_LMSRaftServiceServicer_to_server(LMSRaftServiceServicer(node_id, port), server)
@@ -395,7 +425,6 @@ def serve(node_id, port):
     except KeyboardInterrupt:
         print(f"Shutting down the server {node_id}.")
         server.stop(0)
-
 
 if __name__ == '__main__':
     import sys
