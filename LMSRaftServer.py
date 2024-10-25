@@ -5,6 +5,8 @@ import threading
 import random
 import lms_pb2
 import lms_pb2_grpc
+import json
+import os
 
 # Define hardcoded credentials for students and instructors
 users = {
@@ -43,7 +45,8 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
         # LMS state (in-memory)
         self.sessions = {}  # Token to user mapping
-        self.data_store = {}  # Store assignments and other data by type
+        # self.data_store = self.load_data_store()  # Store assignments and other data by type
+        self.data_store = {}
 
         self.port = port
         self.node_ports = {
@@ -52,6 +55,10 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             'node3': '50053',
             'node4': '50054'
         }
+        
+        # LLM functionalities
+        self.tutoring_channel = grpc.insecure_channel('localhost:50055')
+        self.tutoring_stub = lms_pb2_grpc.TutoringServerStub(self.tutoring_channel)
 
         # Start the election timer
         self.reset_election_timer()
@@ -63,6 +70,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         if request.username in users and users[request.username] == request.password:
             token = f"token-{time.time()}"  # Generate a simple token
             self.sessions[token] = request.username
+            print(f"User {request.username} has logged in with Token {token}")
             # Now replicate this token to all the followers
             success = self.replicate_session_to_followers(token, request.username)
             if success:
@@ -78,6 +86,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         """Handle user logout."""
         if request.token in self.sessions:
             del self.sessions[request.token]
+            
             return lms_pb2.StatusResponse(success=True, message="Logged out successfully")
         return lms_pb2.StatusResponse(success=False, message="Invalid token")
 
@@ -87,9 +96,12 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             return lms_pb2.StatusResponse(success=False, message="Only leader can handle writes.")
 
         if request.token in self.sessions:
+            # Ensure that request.type is a valid key in data_store
             if request.type not in self.data_store:
-                self.data_store[request.type] = []
+                self.data_store[request.type] = []  # Initialize as an empty list for this type
+            
             self.data_store[request.type].append(request.data)
+           
             log_entry = {'term': self.current_term, 'type': request.type, 'data': request.data}
             self.log.append(log_entry)
             print(self.log)
@@ -207,10 +219,22 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                     if self.get_active_nodes() > 1:
                         self.send_append_entries(node, port, append_entries_request)
 
+            # Check if self.data_store is initialized
+            if self.data_store is None:
+                print("Warning: data_store was None, initializing as an empty dictionary.")
+                self.data_store = {}
+        
+        if isinstance(self.data_store, dict):
             # Replicate data store during heartbeats
 
             for data_type, data_list in self.data_store.items():
                 self.replicate_data_store_to_followers(data_type, data_list)
+            
+            for token, user in self.sessions.items():
+                self.replicate_session_to_followers(token, user)
+
+        else:
+            print(f"Error: self.data_store is of type {type(self.data_store)}, expected dict.")
 
             self.reset_heartbeat_timer()
 
@@ -359,6 +383,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             
                     if response.success:
                         success_count += 1
+                        # print(f"{success_count} time success")
                     else:
                         print(f"Data replication failed to {follower}")
 
@@ -374,7 +399,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
     def AddSession(self, request, context):
         """Add session (token and username) received from the leader."""
         self.sessions[request.token] = request.username
-        print(f"Token {request.token} added. User {request.username} logged in")
+        print(f"User {request.username} with Token {request.token} is currently active with leader {self.leader_id}.")
         return lms_pb2.StatusResponse(success=True)
     
     def get_majority_count(self):
@@ -403,8 +428,6 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 print(f"Node {node} is down or not responding")
         print(f"Number of Current Active nodes: {active_nodes}")
         return active_nodes
-
-    
     
     def ReplicateDataStore(self, request, context):
         if request.type not in self.data_store:
@@ -412,18 +435,92 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         self.data_store[request.type] = list(request.data)
         print(f"Follower {self.node_id} updated data store: {self.data_store}")
         return lms_pb2.StatusResponse(success=True, message="Data store replicated successfully")
+    
+    def getLLMAnswer(self, request, context):
+        # Forward query to the tutoring server
+        tutoring_response = self.tutoring_stub.getLLMAnswer(
+            lms_pb2.getLLMAnswerRequest(queryId=request.queryId, query=request.query))
+        return tutoring_response
+    
+    def save_data_store(self):
+        """Save the current data_store to a file."""
+        file_name = f"data_store_{self.node_id}.json"
+        try:
+            with open(file_name, 'w') as file:
+                json.dump(self.data_store, file)
+            print(f"Data store saved successfully for node {self.node_id}.")
+        except Exception as e:
+            print(f"Error saving data store for node {self.node_id}: {e}")
+    
+    def load_data_store(self):
+        """Load the data_store from a file, if it exists."""
+        file_name = f"data_store_{self.node_id}.json"
+        if os.path.exists(file_name):
+            try:
+                with open(file_name, 'r') as file:
+                    data = json.load(file)
+                    if (isinstance(data,dict)):
+                        self.data_store = data
+                    else:
+                        print("Warning: data_store.json did not contain a dictionary. Initializing as empty dictionary.")
+                        self.data_store = {}
+                print(f"Data store loaded successfully for node {self.node_id}.")
+            except Exception as e:
+                print(f"Error loading data store for node {self.node_id}: {e}")
+                self.data_store = {}  # Initialize an empty data store on error
+        else:
+            print(f"No previous data store found for node {self.node_id}, starting with an empty data store.")
+            self.data_store = {}
+    
+    def get_leader_address(self, max_retries=10, retry_delay=2):
+        """Retrieve the address of the current leader node, with retry logic."""
+        for attempt in range(max_retries):
+            try:
+                if self.leader_id is None:
+                    raise Exception("Leader is not known yet.")
+
+                if self.leader_id in self.node_ports:
+                    leader_port = self.node_ports[self.leader_id]
+                    leader_address = f"localhost:{leader_port}"
+                    return leader_address
+                else:
+                    raise Exception(f"Leader ID {self.leader_id} is not recognized.")
+        
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"Attempt {attempt + 1} failed: {e}. Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Optional: exponential backoff
+                else:
+                    print(f"All {max_retries} attempts failed. Error: {e}")
+                    raise  # Re-raise the exception after all retries are exhausted
+
 
 def serve(node_id, port):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    lms_pb2_grpc.add_LMSRaftServiceServicer_to_server(LMSRaftServiceServicer(node_id, port), server)
+    raft_servicer = LMSRaftServiceServicer(node_id, port)
+
+    lms_pb2_grpc.add_LMSRaftServiceServicer_to_server(raft_servicer, server)
     server.add_insecure_port(f'[::]:{port}')
     server.start()
+    
     print(f"LMS Raft-based Server {node_id} started on port {port}.")
+    
+    # After starting the server, check if the node is a follower
+    if raft_servicer.state == FOLLOWER:
+
+        print(f"Node {node_id} is a follower. Fetching data_store from local files.")
+        raft_servicer.load_data_store()
+        # if not raft_servicer.data_store:
+        #     print(f"Node {node_id} is a follower. Fetching data_store from leader.")
+        #     raft_servicer.fetch_data_store_from_leader()  # Fetch the latest data_store from the leader
+    
     try:
         while True:
             time.sleep(86400)
     except KeyboardInterrupt:
         print(f"Shutting down the server {node_id}.")
+        raft_servicer.save_data_store()  # Save the data store before shutting down
         server.stop(0)
 
 if __name__ == '__main__':
@@ -437,3 +534,4 @@ if __name__ == '__main__':
     port = sys.argv[2]
 
     serve(node_id, port)
+
