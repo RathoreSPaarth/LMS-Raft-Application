@@ -53,6 +53,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             'node1': '172.17.49.87:50051',  # ASUS
             'node2': '172.17.49.125:50052', # Aditya
             'node3': '172.17.49.183:50053', # Nishit
+            'node4': '172.17.49.232:50054' #lenovo
         }
         
         # LLM functionalities
@@ -347,7 +348,7 @@ def serve(node_id, port):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     raft_servicer = LMSRaftServiceServicer(node_id, port)
     lms_pb2_grpc.add_LMSRaftServiceServicer_to_server(raft_servicer, server)
-    server.add_insecure_port(f'172.17.49.232:50051')
+    server.add_insecure_port(f'[::]:50054')
     
     server.start()
     
