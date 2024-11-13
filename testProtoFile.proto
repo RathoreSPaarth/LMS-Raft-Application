@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+// LMS Service for login, logout, posting, and getting data
+service LMSService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (StatusResponse);
+  rpc Post(PostRequest) returns (StatusResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  
+  // New RPC for LLM-based query response
+  rpc getLLMAnswer(getLLMAnswerRequest) returns (getLLMAnswerResponse);
+}
+
+// Tutoring service for handling LLM queries
+service TutoringServer {
+  rpc getLLMAnswer(getLLMAnswerRequest) returns (getLLMAnswerResponse);
+}
+
+// Raft consensus service to handle leader election and log replication
+service LMSRaftService {
+  rpc RequestVote (RequestVoteRequest) returns (RequestVoteReply);
+  rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesReply);
+
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (StatusResponse);
+  rpc Post(PostRequest) returns (StatusResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+
+  // New RPC to get leader information
+  rpc GetLeader(GetLeaderRequest) returns (GetLeaderReply);
+
+  rpc AddSession(AddSessionRequest) returns (StatusResponse);
+  rpc ReplicateDataStore(ReplicateDataStoreRequest) returns (StatusResponse);
+}
+
+// Messages for LMS service
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  bool success = 1;
+  string token = 2;
+}
+
+message LogoutRequest {
+  string token = 1;
+}
+
+message PostRequest {
+  string token = 1;
+  string type = 2;
+  string data = 3;
+}
+
+message GetRequest {
+  string token = 1;
+  string type = 2;
+  string optional_data = 3;
+}
+
+message GetResponse {
+  repeated DataItem data = 1;
+}
+
+message DataItem {
+  string type_id = 1;
+  string data = 2;
+}
+
+message StatusResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Messages for handling LLM query requests and responses
+message getLLMAnswerRequest {
+  string token = 1;
+  string queryId = 2;
+  string query = 3;
+}
+
+message getLLMAnswerResponse {
+  string queryId = 1;
+  string answer = 2;
+}
+
+// Messages for Raft consensus
+message RequestVoteRequest {
+  int32 candidateId = 1;  // Candidate requesting vote
+  int32 term = 2;         // Candidate's term
+  int32 lastLogIndex = 3; // Index of candidate's last log entry
+  int32 lastLogTerm = 4;  // Term of candidate's last log entry
+}
+
+message RequestVoteReply {
+  int32 term = 1;         // Current term, for candidate to update itself
+  bool voteGranted = 2;   // True if candidate received vote
+}
+
+// Define LogEntry for structured log data
+message LogEntry {
+  int32 term = 1;
+  string type = 2;
+  string data = 3;
+}
+
+message AppendEntriesRequest {
+  int32 leaderId = 1;     // Leader's ID
+  int32 term = 2;         // Leader’s term
+  int32 prevLogIndex = 3; // Index of log entry immediately preceding new ones
+  int32 prevLogTerm = 4;  // Term of `prevLogIndex` entry
+  repeated LogEntry entries = 5; // Log entries to store (empty for heartbeat)
+  int32 leaderCommit = 6; // Leader’s commit index
+}
+
+message AppendEntriesReply {
+  int32 term = 1;         // Current term, for leader to update itself
+  bool success = 2;       // True if follower contained entry matching `prevLogIndex` and `prevLogTerm`
+}
+
+message GetLeaderRequest {}
+
+message GetLeaderReply {
+  bool isLeader = 1; // Whether this node is the leader
+  int32 leaderId = 2; // The ID of the leader
+}
+
+message AddSessionRequest {
+    string token = 1;
+    string username = 2;
+}
+
+message ReplicateDataStoreRequest {
+    int32 leaderId = 1;
+    string type = 2;
+    repeated string data = 3;
+}
