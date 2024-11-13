@@ -53,7 +53,6 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             'node1': '172.17.49.87:50051',  # ASUS
             'node2': '172.17.49.125:50052', # Aditya
             'node3': '172.17.49.183:50053', # Nishit
-            'node4': '172.17.49.190:50054'  # Additional Node
         }
         
         # LLM functionalities
@@ -320,32 +319,35 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             self.data_store = {}
 
     def get_leader_address(self, max_retries=10, retry_delay=2):
+        """Retrieve the address of the current leader node, with retry logic."""
         for attempt in range(max_retries):
             try:
+                # Check if leader_id is set
                 if self.leader_id is None:
                     raise Exception("Leader is not known yet.")
-
+                
+                # Use leader's IP and port from node_ports
                 if self.leader_id in self.node_ports:
-                    leader_port = self.node_ports[self.leader_id]
-                    leader_address = f"localhost:{leader_port}"
+                    leader_address = self.node_ports[self.leader_id]
                     return leader_address
                 else:
-                    raise Exception(f"Leader ID {self.leader_id} is not recognized.")
-        
+                    raise Exception(f"Leader ID {self.leader_id} is not recognized in node_ports.")
+            
             except Exception as e:
                 if attempt < max_retries - 1:
                     print(f"Attempt {attempt + 1} failed: {e}. Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
-                    retry_delay *= 2
+                    retry_delay *= 2  # Optional: exponential backoff
                 else:
                     print(f"All {max_retries} attempts failed. Error: {e}")
-                    raise
+                    raise  # Re-raise the exception after all retries are exhausted
+
 
 def serve(node_id, port):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     raft_servicer = LMSRaftServiceServicer(node_id, port)
     lms_pb2_grpc.add_LMSRaftServiceServicer_to_server(raft_servicer, server)
-    server.add_insecure_port(f'[::]:{port}')
+    server.add_insecure_port(f'172.17.49.232:50051')
     
     server.start()
     
