@@ -130,6 +130,7 @@ message GetLeaderReply {
 message AddSessionRequest {
     string token = 1;
     string username = 2;
+    int32 timeout = 3;
 }
 
 message ReplicateDataStoreRequest {
