@@ -26,7 +26,7 @@ LEADER = 2
 # Raft timeout constants
 MIN_ELECTION_TIMEOUT = 10  # Minimum election timeout in seconds
 MAX_ELECTION_TIMEOUT = 20  # Maximum election timeout in seconds
-HEARTBEAT_INTERVAL = 2     # Leader heartbeat interval in seconds
+HEARTBEAT_INTERVAL = 5   # Leader heartbeat interval in seconds
 
 class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
     def __init__(self, node_id, port):
@@ -57,7 +57,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             1: {"ip": "172.17.49.232", "port": 50051},  # lenovo
             2: {"ip": "172.17.49.87", "port": 50051},   # asus
             3: {"ip": "172.17.49.125", "port": 50051},  # aditya
-            4: {"ip": "172.17.49.232", "port": 50053}   # N
+            4: {"ip": "172.17.49.183", "port": 50051}   # N
         }
 
         # LLM functionalities
@@ -219,13 +219,13 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         self.current_term += 1
         self.voted_for = self.node_id
         self.votes_received = 1  # Vote for self
-        active_nodes = self.get_active_nodes()
+        # active_nodes = self.get_active_nodes()
 
         # If there's only one active node, declare self as the leader
-        if active_nodes == 1:
-            self.state = LEADER
-            self.become_leader()
-            return
+        # if active_nodes == 1:
+        #     self.state = LEADER
+        #     self.become_leader()
+        #     return
 
         # Send RequestVote RPCs to all other nodes
         for node_id, address in self.node_addresses.items():
@@ -268,9 +268,10 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
         if self.state == CANDIDATE and response.voteGranted:
             self.votes_received += 1
+            print(f"Received a vote. Total votes: {'node_id': self.node_id} {self.votes_received}")
             logging.info(f"Received a vote. Total votes: {self.votes_received}", extra={'node_id': self.node_id})
 
-            if self.votes_received > (self.get_active_nodes() // 2):
+            if self.votes_received >= 2:
                 self.become_leader()
 
     def become_leader(self):
@@ -303,8 +304,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                         entries=[],  # Heartbeat does not include log entries
                         leaderCommit=self.commit_index
                     )
-                    if self.get_active_nodes() > 1:
-                        self.send_append_entries(ip, port, append_entries_request)
+                    self.send_append_entries(ip, port, append_entries_request)
 
             # Check if self.data_store is initialized
             if self.data_store is None:
@@ -398,7 +398,8 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                     logging.error(f"Error replicating to follower {node_id} at {ip}:{port}", extra={'node_id': self.node_id})
 
         # Return True if replication succeeded on a majority of nodes
-        return success_count >= (self.get_active_nodes() // 2)
+        # return success_count >= (self.get_active_nodes() // 2)
+        return success_count >= 2
 
     def get_last_log_index(self):
         return len(self.log) - 1 if self.log else 0
@@ -449,7 +450,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 logging.error(f"Failed to replicate session to follower {follower}", extra={'node_id': self.node_id})
 
         # Return True if a majority of followers successfully replicated the session
-        return success_count >= self.get_majority_count()
+        return success_count >= 2
 
     def replicate_data_store_to_followers(self, data_type, data_list):
         """Replicate the data_store to all followers after log replication."""
@@ -484,7 +485,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 logging.error(f"Failed to replicate data store to follower {follower}", extra={'node_id': self.node_id})
 
         # Check if the majority of followers replicated the data_store
-        return success_count >= self.get_majority_count()
+        return success_count >= 2
 
     def AddSession(self, request, context):
         """Add session (token and username) received from the leader."""
@@ -493,7 +494,8 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         return lms_pb2.StatusResponse(success=True)
 
     def get_majority_count(self):
-        total_nodes = self.get_active_nodes()
+        # total_nodes = self.get_active_nodes()
+        total_nodes = len(self.node_addresses)
         return (total_nodes // 2) + 1
 
     def get_active_nodes(self):
