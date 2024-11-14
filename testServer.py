@@ -56,7 +56,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         self.node_addresses = {
             1: {"ip": "172.17.49.232", "port": 50051},  # lenovo
             2: {"ip": "172.17.49.87", "port": 50051},   # asus
-            3: {"ip": "172.17.49.232", "port": 50052},  # aditya
+            3: {"ip": "172.17.49.125", "port": 50051},  # aditya
             4: {"ip": "172.17.49.232", "port": 50053}   # N
         }
 
@@ -117,14 +117,87 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         return lms_pb2.StatusResponse(success=False, message="Invalid token")
 
     def Get(self, request, context):
-        """Handle getting data."""
+        """Handle getting data with detailed error handling and logging."""
+        print("inside get function on server side")
+        
         if request.token in self.sessions:
+            print("inside get function - if statement - on server side")
             data = self.data_store.get(request.type, [])
-            data_items = [lms_pb2.DataItem(type_id=str(i), data=item) for i, item in enumerate(data)]
-            logging.debug(f"Get request for type '{request.type}': {data_items}", extra={'node_id': self.node_id})
-            return lms_pb2.GetResponse(data=data_items)
+            print("Fetched data:", data)  # Log the fetched data
+            
+            data_items = []
+            for i, item in enumerate(data):
+                try:
+                    # Ensure item is a string; convert if necessary
+                    if not isinstance(item, str):
+                        item = str(item)
+                    print(f"Creating DataItem for item {i}: {item}")
+                    
+                    # Attempt to create DataItem
+                    data_item = lms_pb2.DataItem(type_id=str(i), data=item)
+                    # data_item = lms_pb2.DataItem(type_id="0", data="sample test data please help!")
+                    print(f"Successfully created DataItem for item {i}. Below list data_item")
+                    print(data_item)
+                    data_items.append(data_item)
+                except Exception as e:
+                    print(f"Error creating DataItem for item {i}")
+                    logging.error(f"Error creating DataItem for item {i}", extra={'node_id': self.node_id})
+            
+            # If successfully created data items, return them
+            print("this is the data_items - ")
+            print(data_items)
+            if data_items:
+                print("inside get function - fetched data_items - on server side")
+                logging.debug(f"Get request for type '{request.type}': {data_items}", extra={'node_id': self.node_id})
+                return lms_pb2.GetResponse(data=data_items)
+            else:
+                print("No valid data items to return.")
+                return lms_pb2.GetResponse(data=[])
+        
+        # If token is invalid, log and return empty response
         logging.warning("Invalid token for Get request.", extra={'node_id': self.node_id})
         return lms_pb2.GetResponse(data=[])
+
+
+
+
+    # def Get(self, request, context):
+    #     print("inside get function on server side")
+    #     try:
+    #         # Check for token presence in the request and validate it
+    #         if not hasattr(request, 'token') or not request.token:
+    #             logging.warning("Missing or invalid token in Get request.", extra={'node_id': self.node_id})
+    #             return lms_pb2.GetResponse(data=[])
+
+    #         # Verify if the provided token is in active sessions
+    #         if request.token in self.sessions:
+    #             # Confirm request contains 'type' attribute
+    #             if not hasattr(request, 'type') or request.type is None:
+    #                 logging.warning("Get request missing 'type' field.", extra={'node_id': self.node_id})
+    #                 return lms_pb2.GetResponse(data=[])
+
+    #             # Retrieve data and validate it's a list or convert if possible
+    #             data_type = request.type
+    #             data = self.data_store.get(data_type, [])
+    #             if not isinstance(data, list):
+    #                 logging.error(f"Data for type '{data_type}' is not a list. Data: {data}", extra={'node_id': self.node_id})
+    #                 return lms_pb2.GetResponse(data=[])
+
+    #             # Create DataItem messages from data
+    #             data_items = [lms_pb2.DataItem(type_id=str(i), data=item) for i, item in enumerate(data)]
+    #             logging.debug(f"Get request processed for type '{data_type}', data items: {data_items}", extra={'node_id': self.node_id})
+    #             return lms_pb2.GetResponse(data=data_items)
+            
+    #         # Token is invalid if not found in sessions
+    #         logging.warning("Invalid token provided in Get request.", extra={'node_id': self.node_id})
+    #         return lms_pb2.GetResponse(data=[])
+        
+    #     except Exception as e:
+    #         # Log unexpected errors with traceback
+    #         logging.exception("Unexpected error in Get method", extra={'node_id': self.node_id})
+    #         return lms_pb2.GetResponse(data=[])
+
+
 
     ### Raft Functionality (Leader Election, Heartbeats) ###
 
@@ -182,7 +255,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             logging.debug(f"Received response from {ip}:{port}", extra={'node_id': self.node_id})
             self.handle_vote_response(response)
         except grpc.RpcError as e:
-            logging.error(f"Error sending RequestVote to {ip}:{port}: {e}", extra={'node_id': self.node_id})
+            logging.error(f"Error sending RequestVote to {ip}:{port}", extra={'node_id': self.node_id})
 
     def handle_vote_response(self, response):
         """Handle response to a vote request."""
@@ -261,7 +334,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             response = stub.AppendEntries(append_entries_request)
             self.handle_append_entries_response(response)
         except grpc.RpcError as e:
-            logging.error(f"Error sending AppendEntries to {ip}:{port}: {e}", extra={'node_id': self.node_id})
+            logging.error(f"Error sending AppendEntries to {ip}:{port}", extra={'node_id': self.node_id})
 
     def handle_append_entries_response(self, response):
         """Handle response to an AppendEntries RPC."""
@@ -322,7 +395,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                     if response.success:
                         success_count += 1
                 except Exception as e:
-                    logging.error(f"Error replicating to follower {node_id} at {ip}:{port}: {e}", extra={'node_id': self.node_id})
+                    logging.error(f"Error replicating to follower {node_id} at {ip}:{port}", extra={'node_id': self.node_id})
 
         # Return True if replication succeeded on a majority of nodes
         return success_count >= (self.get_active_nodes() // 2)
@@ -356,7 +429,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         follower_addresses = []
 
         for node_id, address in self.node_addresses.items():
-            if node_id != self.node_id:  # Skip the leader itself
+            # if node_id != self.node_id:  # Skip the leader itself // paarth //
                 ip = address['ip']
                 port = address['port']
                 follower_addresses.append(f"{ip}:{port}")
@@ -368,12 +441,12 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
 
                 # Send a request to the follower to add the session
-                response = stub.AddSession(lms_pb2.AddSessionRequest(token=token, username=username))
+                response = stub.AddSession(lms_pb2.AddSessionRequest(token=token, username=username, timeout = 1))
 
                 if response.success:
                     success_count += 1
             except grpc.RpcError as e:
-                logging.error(f"Failed to replicate session to follower {follower}: {e}", extra={'node_id': self.node_id})
+                logging.error(f"Failed to replicate session to follower {follower}", extra={'node_id': self.node_id})
 
         # Return True if a majority of followers successfully replicated the session
         return success_count >= self.get_majority_count()
@@ -384,7 +457,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         follower_addresses = []
 
         for node_id, address in self.node_addresses.items():
-            if node_id != self.node_id:  # Skip the leader itself
+            # if node_id != self.node_id:  # Skip the leader itself //paarth
                 ip = address['ip']
                 port = address['port']
                 follower_addresses.append(f"{ip}:{port}")
@@ -408,7 +481,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 else:
                     logging.warning(f"Data replication failed to {follower}", extra={'node_id': self.node_id})
             except grpc.RpcError as e:
-                logging.error(f"Failed to replicate data store to follower {follower}: {e}", extra={'node_id': self.node_id})
+                logging.error(f"Failed to replicate data store to follower {follower}", extra={'node_id': self.node_id})
 
         # Check if the majority of followers replicated the data_store
         return success_count >= self.get_majority_count()
@@ -442,7 +515,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                     active_nodes += 1
             except grpc.RpcError as e:
                 # Node is not available, log the error and continue
-                logging.debug(f"Node {node_id} at {ip}:{port} is down or not responding: {e}", extra={'node_id': self.node_id})
+                logging.debug(f"Node {node_id} at {ip}:{port} is down or not responding", extra={'node_id': self.node_id})
 
         logging.info(f"Number of Current Active nodes: {active_nodes}", extra={'node_id': self.node_id})
         return active_nodes
@@ -468,7 +541,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 json.dump(self.data_store, file)
             logging.info(f"Data store saved successfully.", extra={'node_id': self.node_id})
         except Exception as e:
-            logging.error(f"Error saving data store: {e}", extra={'node_id': self.node_id})
+            logging.error(f"Error saving data store", extra={'node_id': self.node_id})
 
     def load_data_store(self):
         """Load the data_store from a file, if it exists."""
@@ -484,7 +557,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                         self.data_store = {}
                 logging.info(f"Data store loaded successfully.", extra={'node_id': self.node_id})
             except Exception as e:
-                logging.error(f"Error loading data store: {e}", extra={'node_id': self.node_id})
+                logging.error(f"Error loading data store", extra={'node_id': self.node_id})
                 self.data_store = {}  # Initialize an empty data store on error
         else:
             logging.info("No previous data store found, starting with an empty data store.", extra={'node_id': self.node_id})
@@ -494,7 +567,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         """Retrieve the address of the current leader node, with retry logic."""
         for attempt in range(max_retries):
             try:
-                if self.leader_id is -1:
+                if self.leader_id == -1:
                     raise Exception("Leader is not known yet.")
 
                 # Retrieve leader IP and port from node_addresses
@@ -509,11 +582,11 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    logging.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {retry_delay} seconds...", extra={'node_id': self.node_id})
+                    logging.warning(f"Attempt {attempt + 1} failed. Retrying in {retry_delay} seconds...", extra={'node_id': self.node_id})
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Optional: exponential backoff
                 else:
-                    logging.error(f"All {max_retries} attempts failed. Error: {e}", extra={'node_id': self.node_id})
+                    logging.error(f"All {max_retries} attempts failed. Error", extra={'node_id': self.node_id})
                     raise  # Re-raise the exception after all retries are exhausted
 
 def serve(node_id, ip, port):
