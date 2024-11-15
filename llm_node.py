@@ -6,7 +6,7 @@ import lms_pb2_grpc
 import openai
 
 # Initialize OpenAI API key
-openai.api_key = 'sk-Q0bZUA0Zp8OvWygfYczUeXGrMx-sOGd5WK36nqMmy3T3BlbkFJJb6JOvr-2w_ToBdPA26fAqMteG9T8SCrxOvnfw9qEA'
+openai.api_key = ''
 
 class TutoringServerServicer(lms_pb2_grpc.TutoringServerServicer):
     def getLLMAnswer(self, request, context):
