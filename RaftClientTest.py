@@ -5,7 +5,7 @@ import time
 
 class LMSClient:
     def __init__(self, node_addresses):
-        self.node_addresses = node_addresses  # List of node addresses in the format ['localhost:50051', ...]
+        self.node_addresses = node_addresses  # Dictionary of node addresses in the format {node_id: 'ip:port', ...}
         self.current_leader = None  # Track the current leader's address
         self.token = None  # Store the session token after login
 
@@ -18,15 +18,10 @@ class LMSClient:
     def login(self, username, password):
         """Login to the LMS server via the leader node."""
         try:
-            # Get the leader port first
-            leader_port = self.get_leader_port()
-
-            if leader_port:
-                # Create a stub using the leader's port
-                leader_address = f'localhost:{leader_port}'
+            leader_address = self.get_leader_address()
+            if leader_address:
                 stub = self.create_stub(leader_address)
-                # Attempt to login via the leader
-                response = stub.Login(lms_pb2.LoginRequest(username=username, password=password)) 
+                response = stub.Login(lms_pb2.LoginRequest(username=username, password=password))
 
                 if response.success:
                     self.token = response.token
@@ -36,11 +31,11 @@ class LMSClient:
                     print("Login failed.")
                     return False
             else:
-                print("Failed to retrieve the leader's port.")
+                print("Failed to retrieve the leader's address.")
                 return False
 
         except grpc.RpcError as e:
-            print(f"Failed to login via the leader node")
+            print(f"gRPC error during login: {e.details()}")
             return False
 
     def post(self, data_type, data):
@@ -50,23 +45,23 @@ class LMSClient:
             return
 
         try:
-            # Ensure the leader is known
-            leader_port = self.get_leader_port()
-            leader_address = f'localhost:{leader_port}'
-            print(leader_address)
-            # Send post request to the leader node
-            stub = self.create_stub(leader_address)
-            response = stub.Post(lms_pb2.PostRequest(token=self.token, type=data_type, data=data))
+            leader_address = self.get_leader_address()
+            if leader_address:
+                stub = self.create_stub(leader_address)
+                response = stub.Post(lms_pb2.PostRequest(token=self.token, type=data_type, data=data))
 
-            if response.success:
-                print(f"Data posted successfully via {leader_address}.")
-                return True
+                if response.success:
+                    print(f"Data posted successfully via {leader_address}.")
+                    return True
+                else:
+                    print(f"Post failed via {leader_address}. Message: {response.message}")
+                    return False
             else:
-                print(f"Post failed via {leader_address}. Message: {response.message}")
+                print("Failed to retrieve the leader's address.")
                 return False
 
         except grpc.RpcError as e:
-            print(f"Error posting data via leader node")
+            print(f"gRPC error during post: {e.details()}")
             return False
 
     def get(self, data_type):
@@ -76,24 +71,26 @@ class LMSClient:
             return
 
         try:
-            # Ensure the leader is known
-            leader_port = self.get_leader_port()
-            leader_address = f'localhost:{leader_port}'
-
-            # Send get request to the leader node
-            stub = self.create_stub(leader_address)
-            response = stub.Get(lms_pb2.GetRequest(token=self.token, type=data_type))
-            if response.data:
-                print(f"Data retrieved from {leader_address}:")
-                for item in response.data:
-                    print(f"- {item.type_id}: {item.data}")
-                return True
+            leader_address = self.get_leader_address()
+            if leader_address:
+                stub = self.create_stub(leader_address)
+                print("line 77 - clientTest")
+                response = stub.Get(lms_pb2.GetRequest(token=self.token, type=data_type)) 
+                print("line 79 - clientTest")
+                if response.data:
+                    print(f"Data retrieved from {leader_address}:")
+                    for item in response.data:
+                        print(f"- {item.type_id}: {item.data}")
+                    return True
+                else:
+                    print(f"No data found on {leader_address}.")
+                    return False
             else:
-                print(f"No data found on {leader_address}.")
+                print("Failed to retrieve the leader's address.")
                 return False
 
         except grpc.RpcError as e:
-            print(f"Error retrieving data via leader node")
+            print(f"gRPC error during get: {e.details()}")
             return False
 
     def logout(self):
@@ -103,63 +100,85 @@ class LMSClient:
             return
 
         try:
-            leader_port = self.get_leader_port()
-            leader_address = f'localhost:{leader_port}'
+            leader_address = self.get_leader_address()
+            if leader_address:
+                stub = self.create_stub(leader_address)
+                response = stub.Logout(lms_pb2.LogoutRequest(token=self.token))
 
-            # Send logout request to the leader node
-            stub = self.create_stub(leader_address)
-            response = stub.Logout(lms_pb2.LogoutRequest(token=self.token))
-
-            if response.success:
-                print("Logout successful.")
-                self.token = None
-                return True
+                if response.success:
+                    print("Logout successful.")
+                    self.token = None
+                    return True
+                else:
+                    print(f"Logout failed via {leader_address}.")
+                    return False
             else:
-                print(f"Logout failed via {leader_address}.")
+                print("Failed to retrieve the leader's address.")
                 return False
 
         except grpc.RpcError as e:
-            print(f"Failed to logout via leader node")
+            print(f"gRPC error during logout: {e.details()}")
             return False
+        
+    def ask_llm_query(self, query):
+        if self.token is None:
+            print("Please login first.")
+            return
 
-    def get_leader_port(self):
-        """Fetch the leader's port by querying the nodes."""
-        node_ports = {
-            'node1': '50051',
-            'node2': '50052',
-            'node3': '50053',
-            'node4': '50054'
-        }
+        try:
+            # Use the TutoringServer stub instead of LMSRaftServiceStub
+            tutoring_address = '172.17.49.232:50055'  # Replace with the actual IP/port of the TutoringServer
+            channel = grpc.insecure_channel(tutoring_address)
+            stub = lms_pb2_grpc.TutoringServerStub(channel)  # Correct stub for getLLMAnswer
+            
+            # Send the request to the TutoringServer
+            response = stub.getLLMAnswer(lms_pb2.getLLMAnswerRequest(token=self.token, queryId="1", query=query))
+            print(f"LLM Response: {response.answer}")
+        except grpc.RpcError as e:
+            print(f"Error querying LLM service: {e.details()}")
 
-        for node, port in node_ports.items():
+        
+    
+
+    def get_leader_address(self):
+        """Fetch the leader's address by querying all nodes."""
+        for node_id, address in self.node_addresses.items():
             try:
-                # Connect to the node and request the leader status
-                channel = grpc.insecure_channel(f'localhost:{port}')
-                stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+                # Create a stub to communicate with this node
+                stub = self.create_stub(address)
+
+                # Send a GetLeader request to this node
                 response = stub.GetLeader(lms_pb2.GetLeaderRequest())
 
-                # If this node is the leader, return its port
                 if response.isLeader:
-                    print(f"Node {node} is the leader, using port {port}.")
-                    self.current_leader = f"localhost:{port}"
-                    return port
+                    # This node claims to be the leader
+                    print(f"Node {node_id} is the leader, using address {address}.")
+                    self.current_leader = address
+                    return address
 
-                # If this node knows the leader, return the leader's port
-                elif response.leaderId:
-                    leader_port = node_ports[response.leaderId]
-                    print(f"Node {node} is a follower, leader is {response.leaderId} using port {leader_port}.")
-                    self.current_leader = f"localhost:{leader_port}"
-                    return leader_port
+                elif response.leaderId in self.node_addresses:
+                    # This node is a follower but knows the leader
+                    leader_address = self.node_addresses[response.leaderId]
+                    print(f"Node {node_id} is a follower, leader is {response.leaderId} at address {leader_address}.")
+                    self.current_leader = leader_address
+                    return leader_address
 
-            except Exception as e:
-                print(f"Error connecting to node {node} at port {port}")
+            except grpc.RpcError as e:
+                print(f"Error connecting to node {node_id} at address {address}: {e.details() or 'Unknown error'}")
 
-        # If no leader is found, raise an exception
-        raise Exception("No leader found in the cluster.")
+        # If no leader is found
+        print("No leader found in the cluster after checking all nodes.")
+        return None
+
 
 # Usage Example
 if __name__ == '__main__':
-    node_addresses = ['localhost:50051', 'localhost:50052', 'localhost:50053', 'localhost:50054']  # Update with your node addresses
+    node_addresses = {
+        1: '172.17.49.232:50051',  # lenovo
+        2: '172.17.49.232:50052',   # asus
+        3: '172.17.49.232:50053',  # aditya
+        4: '172.17.49.232:50054'   # N
+    }
 
     client = LMSClient(node_addresses)
 
@@ -183,6 +202,9 @@ if __name__ == '__main__':
         elif choice == '2':
             data_type = input("Enter the type of data (e.g., assignment, query) you want to fetch: ")
             client.get(data_type)
+        elif choice == '3':
+            query = input("Enter your query for LLM")
+            client.ask_llm_query(query)
         elif choice == '4':
             client.logout()
             break
