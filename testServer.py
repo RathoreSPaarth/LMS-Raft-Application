@@ -24,9 +24,9 @@ CANDIDATE = 1
 LEADER = 2
 
 # Raft timeout constants
-MIN_ELECTION_TIMEOUT = 10  # Minimum election timeout in seconds
-MAX_ELECTION_TIMEOUT = 20  # Maximum election timeout in seconds
-HEARTBEAT_INTERVAL = 5   # Leader heartbeat interval in seconds
+MIN_ELECTION_TIMEOUT = 3  # Minimum election timeout in seconds
+MAX_ELECTION_TIMEOUT = 6  # Maximum election timeout in seconds
+HEARTBEAT_INTERVAL = 1  # Leader heartbeat interval in seconds
 
 class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
     def __init__(self, node_id, port):
@@ -55,13 +55,13 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
         self.node_addresses = {
             1: {"ip": "172.17.49.232", "port": 50051},  # lenovo
-            2: {"ip": "172.17.49.87", "port": 50051},   # asus
-            3: {"ip": "172.17.49.125", "port": 50051},  # aditya
-            4: {"ip": "172.17.49.183", "port": 50051}   # N
+            2: {"ip": "172.17.49.232", "port": 50052},   # asus
+            3: {"ip": "172.17.49.232", "port": 50053},  # aditya
+            4: {"ip": "172.17.49.232", "port": 50054}   # N
         }
 
         # LLM functionalities
-        self.tutoring_channel = grpc.insecure_channel('localhost:50055')
+        self.tutoring_channel = grpc.insecure_channel('172.17.49.232:50055')
         self.tutoring_stub = lms_pb2_grpc.TutoringServerStub(self.tutoring_channel)
 
         # Start the election timer
@@ -108,7 +108,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
             log_entry = {'term': self.current_term, 'type': request.type, 'data': request.data}
             self.log.append(log_entry)
-            logging.info(f"Appended to log: {log_entry}", extra={'node_id': self.node_id})
+            # logging.info(f"Appended to log: {log_entry}", extra={'node_id': self.node_id})
             # After log replication, send the data_store update
             if self.replicate_data_store_to_followers(request.type, self.data_store[request.type]):
                 return lms_pb2.StatusResponse(success=True, message="Post replicated and committed")
@@ -116,47 +116,80 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 return lms_pb2.StatusResponse(success=False, message="Log replicated but failed to replicate data store")
         return lms_pb2.StatusResponse(success=False, message="Invalid token")
 
-    def Get(self, request, context):
-        """Handle getting data with detailed error handling and logging."""
-        print("inside get function on server side")
+    # def Get(self, request, context):
+    #     """Handle getting data with detailed error handling and logging."""
+    #     print("inside get function on server side")
         
-        if request.token in self.sessions:
-            print("inside get function - if statement - on server side")
-            data = self.data_store.get(request.type, [])
-            print("Fetched data:", data)  # Log the fetched data
+    #     if request.token in self.sessions:
+    #         print("inside get function - if statement - on server side")
+    #         data = self.data_store.get(request.type, [])
+    #         print("Fetched data:", data)  # Log the fetched data
             
-            data_items = []
-            for i, item in enumerate(data):
-                try:
-                    # Ensure item is a string; convert if necessary
-                    if not isinstance(item, str):
-                        item = str(item)
-                    print(f"Creating DataItem for item {i}: {item}")
+    #         data_items = []
+    #         for i, item in enumerate(data):
+    #             try:
+    #                 # Ensure item is a string; convert if necessary
+    #                 if not isinstance(item, str):
+    #                     item = str(item)
+    #                 print(f"Creating DataItem for item {i}: {item}")
                     
-                    # Attempt to create DataItem
-                    data_item = lms_pb2.DataItem(type_id=str(i), data=item)
-                    # data_item = lms_pb2.DataItem(type_id="0", data="sample test data please help!")
-                    print(f"Successfully created DataItem for item {i}. Below list data_item")
-                    print(data_item)
-                    data_items.append(data_item)
-                except Exception as e:
-                    print(f"Error creating DataItem for item {i}")
-                    logging.error(f"Error creating DataItem for item {i}", extra={'node_id': self.node_id})
+    #                 # Attempt to create DataItem
+    #                 data_item = lms_pb2.DataItem(type_id=str(i), data=item)
+    #                 # data_item = lms_pb2.DataItem(type_id="0", data="sample test data please help!")
+    #                 print(f"Successfully created DataItem for item {i}. Below list data_item")
+    #                 print(data_item)
+    #                 data_items.append(data_item)
+    #             except Exception as e:
+    #                 print(f"Error creating DataItem for item {i}")
+    #                 logging.error(f"Error creating DataItem for item {i}", extra={'node_id': self.node_id})
             
-            # If successfully created data items, return them
-            print("this is the data_items - ")
-            print(data_items)
-            if data_items:
-                print("inside get function - fetched data_items - on server side")
-                logging.debug(f"Get request for type '{request.type}': {data_items}", extra={'node_id': self.node_id})
+    #         # If successfully created data items, return them
+    #         print("this is the data_items - ")
+    #         print(data_items)
+    #         if data_items:
+    #             print("inside get function - fetched data_items - on server side")
+    #             logging.debug(f"Get request for type '{request.type}': {data_items}", extra={'node_id': self.node_id})
+    #             return lms_pb2.GetResponse(data=data_items)
+    #         else:
+    #             print("No valid data items to return.")
+    #             return lms_pb2.GetResponse(data=[])
+        
+    #     # If token is invalid, log and return empty response
+    #     logging.warning("Invalid token for Get request.", extra={'node_id': self.node_id})
+    #     return lms_pb2.GetResponse(data=[])
+
+    def Get(self, request, context):
+        try:
+            logging.debug("inside get function on server side", extra={'node_id': self.node_id})
+            
+            if request.token in self.sessions:
+                logging.debug("Valid token received", extra={'node_id': self.node_id})
+                data = self.data_store.get(request.type, [])
+                logging.debug(f"Fetched data: {data}", extra={'node_id': self.node_id})
+                
+                data_items = []
+                for i, item in enumerate(data):
+                    try:
+                        # Ensure item is a string; convert if necessary
+                        if not isinstance(item, str):
+                            item = str(item)
+                        logging.debug(f"Creating DataItem for item {i}: {item}", extra={'node_id': self.node_id})
+                        
+                        # Attempt to create DataItem
+                        data_item = lms_pb2.DataItem(type_id=str(i), content=item)
+                        data_items.append(data_item)
+                    except Exception as e:
+                        logging.error(f"Error creating DataItem for item {i}: {e}", extra={'node_id': self.node_id})
+                
+                # If successfully created data items, return them
+                logging.debug(f"DataItems created: {data_items}", extra={'node_id': self.node_id})
                 return lms_pb2.GetResponse(data=data_items)
             else:
-                print("No valid data items to return.")
+                logging.warning("Invalid token for Get request.", extra={'node_id': self.node_id})
                 return lms_pb2.GetResponse(data=[])
-        
-        # If token is invalid, log and return empty response
-        logging.warning("Invalid token for Get request.", extra={'node_id': self.node_id})
-        return lms_pb2.GetResponse(data=[])
+        except Exception as e:
+            logging.exception(f"Exception in Get method: {e}", extra={'node_id': self.node_id})
+            return lms_pb2.GetResponse(data=[])
 
 
 
@@ -229,7 +262,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
         # Send RequestVote RPCs to all other nodes
         for node_id, address in self.node_addresses.items():
-            if node_id != self.node_id and active_nodes > 1:
+            if node_id != self.node_id:
                 ip = address['ip']
                 port = address['port']
                 request_vote_request = lms_pb2.RequestVoteRequest(
@@ -244,18 +277,34 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         # If no majority votes are received, restart the election timer
         self.reset_election_timer()
 
+    # def send_request_vote(self, ip, port, request_vote_request):
+    #     """Send RequestVote RPC to another node."""
+    #     try:
+    #         logging.debug(f"Sending RequestVote to {ip}:{port}", extra={'node_id': self.node_id})
+    #         # Use IP address and port of the target node
+    #         channel = grpc.insecure_channel(f'{ip}:{port}')
+    #         stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+    #         response = stub.RequestVote(request_vote_request)
+    #         logging.debug(f"Received response from {ip}:{port}", extra={'node_id': self.node_id})
+    #         self.handle_vote_response(response)
+    #     except grpc.RpcError as e:
+    #         logging.error(f"Error sending RequestVote to {ip}:{port}", extra={'node_id': self.node_id})
+
     def send_request_vote(self, ip, port, request_vote_request):
         """Send RequestVote RPC to another node."""
-        try:
-            logging.debug(f"Sending RequestVote to {ip}:{port}", extra={'node_id': self.node_id})
-            # Use IP address and port of the target node
-            channel = grpc.insecure_channel(f'{ip}:{port}')
-            stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
-            response = stub.RequestVote(request_vote_request)
-            logging.debug(f"Received response from {ip}:{port}", extra={'node_id': self.node_id})
-            self.handle_vote_response(response)
-        except grpc.RpcError as e:
-            logging.error(f"Error sending RequestVote to {ip}:{port}", extra={'node_id': self.node_id})
+        def rpc_call():
+            try:
+                logging.debug(f"Sending RequestVote to {ip}:{port}", extra={'node_id': self.node_id})
+                with grpc.insecure_channel(f'{ip}:{port}') as channel:
+                    stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+                    response = stub.RequestVote(request_vote_request, timeout=5)
+                    logging.debug(f"Received response from {ip}:{port}", extra={'node_id': self.node_id})
+                    self.handle_vote_response(response)
+            except grpc.RpcError as e:
+                logging.error(f"Error sending RequestVote to {ip}:{port}: {e.details()}", extra={'node_id': self.node_id})
+
+        threading.Thread(target=rpc_call).start()
+
 
     def handle_vote_response(self, response):
         """Handle response to a vote request."""
@@ -268,10 +317,9 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
 
         if self.state == CANDIDATE and response.voteGranted:
             self.votes_received += 1
-            print(f"Received a vote. Total votes: {'node_id': self.node_id} {self.votes_received}")
             logging.info(f"Received a vote. Total votes: {self.votes_received}", extra={'node_id': self.node_id})
 
-            if self.votes_received >= 2:
+            if self.votes_received >= self.get_majority_count():
                 self.become_leader()
 
     def become_leader(self):
@@ -324,17 +372,32 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         # Reset heartbeat timer
         self.reset_heartbeat_timer()
 
+    # def send_append_entries(self, ip, port, append_entries_request):
+    #     """Send AppendEntries RPC to a follower."""
+    #     try:
+    #         logging.debug(f"Sending AppendEntries to {ip}:{port}", extra={'node_id': self.node_id})
+    #         # Use the IP address and port of the target follower node
+    #         channel = grpc.insecure_channel(f'{ip}:{port}')
+    #         stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+    #         response = stub.AppendEntries(append_entries_request)
+    #         self.handle_append_entries_response(response)
+    #     except grpc.RpcError as e:
+    #         logging.error(f"Error sending AppendEntries to {ip}:{port}", extra={'node_id': self.node_id})
+
     def send_append_entries(self, ip, port, append_entries_request):
         """Send AppendEntries RPC to a follower."""
-        try:
-            logging.debug(f"Sending AppendEntries to {ip}:{port}", extra={'node_id': self.node_id})
-            # Use the IP address and port of the target follower node
-            channel = grpc.insecure_channel(f'{ip}:{port}')
-            stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
-            response = stub.AppendEntries(append_entries_request)
-            self.handle_append_entries_response(response)
-        except grpc.RpcError as e:
-            logging.error(f"Error sending AppendEntries to {ip}:{port}", extra={'node_id': self.node_id})
+        def rpc_call():
+            try:
+                # logging.debug(f"Sending AppendEntries to {ip}:{port}", extra={'node_id': self.node_id})
+                with grpc.insecure_channel(f'{ip}:{port}') as channel:
+                    stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+                    response = stub.AppendEntries(append_entries_request, timeout=5)
+                    self.handle_append_entries_response(response)
+            except grpc.RpcError as e:
+                logging.error(f"Error sending AppendEntries to {ip}:{port}: {e.details()}", extra={'node_id': self.node_id})
+
+        threading.Thread(target=rpc_call).start()
+
 
     def handle_append_entries_response(self, response):
         """Handle response to an AppendEntries RPC."""
@@ -355,7 +418,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             self.voted_for = request.candidateId
             logging.debug(f"Voted for candidate {request.candidateId} in term {self.current_term}.", extra={'node_id': self.node_id})
             return lms_pb2.RequestVoteReply(term=self.current_term, voteGranted=True)
-        logging.debug(f"Did not vote for candidate {request.candidateId} in term {self.current_term}.", extra={'node_id': self.node_id})
+        # logging.debug(f"Did not vote for candidate {request.candidateId} in term {self.current_term}.", extra={'node_id': self.node_id})
         return lms_pb2.RequestVoteReply(term=self.current_term, voteGranted=False)
 
     def AppendEntries(self, request, context):
@@ -371,7 +434,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         # Respond with success
         return lms_pb2.AppendEntriesReply(term=self.current_term, success=True)
 
-    def replicate_to_followers(self, log_entry):
+    def replicate_to_followers(self, log_entry): # not called anywhere
         """Replicate log entry to followers."""
         success_count = 0
         for node_id, address in self.node_addresses.items():
@@ -379,7 +442,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                 ip = address['ip']
                 port = address['port']
                 try:
-                    logging.debug(f"Replicating to follower {node_id} at {ip}:{port}", extra={'node_id': self.node_id})
+                    # logging.debug(f"Replicating to follower {node_id} at {ip}:{port}", extra={'node_id': self.node_id})
                     channel = grpc.insecure_channel(f"{ip}:{port}")
                     stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
                     response = stub.AppendEntries(
@@ -398,8 +461,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                     logging.error(f"Error replicating to follower {node_id} at {ip}:{port}", extra={'node_id': self.node_id})
 
         # Return True if replication succeeded on a majority of nodes
-        # return success_count >= (self.get_active_nodes() // 2)
-        return success_count >= 2
+        return success_count >= self.get_majority_count()
 
     def get_last_log_index(self):
         return len(self.log) - 1 if self.log else 0
@@ -424,33 +486,77 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
             return self.current_term
         return self.log[-1]['term']
 
+    # def replicate_session_to_followers(self, token, username):
+    #     """Replicate session (token, username) to all followers."""
+    #     success_count = 0
+    #     follower_addresses = []
+
+    #     for node_id, address in self.node_addresses.items():
+    #         if node_id != self.node_id:  # Skip the leader itself
+    #             ip = address['ip']
+    #             port = address['port']
+    #             follower_addresses.append(f"{ip}:{port}")
+
+    #     for follower in follower_addresses:
+    #         try:
+    #             # Create a gRPC stub for the follower
+    #             channel = grpc.insecure_channel(follower)
+    #             stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+
+    #             # Send a request to the follower to add the session
+    #             response = stub.AddSession(lms_pb2.AddSessionRequest(token=token, username=username, timeout = 1))
+
+    #             if response.success:
+    #                 success_count += 1
+    #         except grpc.RpcError as e:
+    #             logging.error(f"Failed to replicate session to follower {follower}", extra={'node_id': self.node_id})
+
+    #     # Return True if a majority of followers successfully replicated the session
+    #     return success_count >= self.get_majority_count()
+
     def replicate_session_to_followers(self, token, username):
-        """Replicate session (token, username) to all followers."""
+        """Replicate session (token, username) to all followers asynchronously with timeouts."""
         success_count = 0
-        follower_addresses = []
+        majority_count = self.get_majority_count()-1 #//paarth
+        lock = threading.Lock()
+        condition = threading.Condition(lock)
 
-        for node_id, address in self.node_addresses.items():
-            # if node_id != self.node_id:  # Skip the leader itself // paarth //
-                ip = address['ip']
-                port = address['port']
-                follower_addresses.append(f"{ip}:{port}")
-
-        for follower in follower_addresses:
+        def replicate_to_follower(follower_address):
+            nonlocal success_count
             try:
-                # Create a gRPC stub for the follower
-                channel = grpc.insecure_channel(follower)
-                stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
-
-                # Send a request to the follower to add the session
-                response = stub.AddSession(lms_pb2.AddSessionRequest(token=token, username=username, timeout = 1))
-
-                if response.success:
-                    success_count += 1
+                with grpc.insecure_channel(follower_address) as channel:
+                    stub = lms_pb2_grpc.LMSRaftServiceStub(channel)
+                    response = stub.AddSession(
+                        lms_pb2.AddSessionRequest(token=token, username=username),
+                        timeout=5  # Set the RPC timeout here
+                    )
+                    if response.success:
+                        with lock:
+                            success_count += 1
+                            condition.notify_all()
             except grpc.RpcError as e:
-                logging.error(f"Failed to replicate session to follower {follower}", extra={'node_id': self.node_id})
+                logging.error(f"Failed to replicate session to follower {follower_address}: {e.details()}", extra={'node_id': self.node_id})
 
-        # Return True if a majority of followers successfully replicated the session
-        return success_count >= 2
+        threads = []
+        for node_id, address in self.node_addresses.items():
+            if node_id != self.node_id:
+                follower_address = f"{address['ip']}:{address['port']}"
+                thread = threading.Thread(target=replicate_to_follower, args=(follower_address,))
+                thread.start()
+                threads.append(thread)
+
+        # Wait until majority is achieved or all threads are done
+        with condition:
+            while success_count < majority_count and any(thread.is_alive() for thread in threads):
+                condition.wait(timeout=5)
+
+        # Optionally, you can join all threads to ensure they're completed
+        for thread in threads:
+            thread.join(timeout=0)
+
+        return success_count >= majority_count
+
+
 
     def replicate_data_store_to_followers(self, data_type, data_list):
         """Replicate the data_store to all followers after log replication."""
@@ -458,7 +564,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         follower_addresses = []
 
         for node_id, address in self.node_addresses.items():
-            # if node_id != self.node_id:  # Skip the leader itself //paarth
+            if node_id != self.node_id:  # Skip the leader itself
                 ip = address['ip']
                 port = address['port']
                 follower_addresses.append(f"{ip}:{port}")
@@ -475,17 +581,17 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                     leaderId=self.leader_id,
                     type=data_type,
                     data=data_list  # Send the full list of data for the given type
-                ), timeout=1)
+                ), timeout=5)
 
                 if response.success:
                     success_count += 1
-                else:
-                    logging.warning(f"Data replication failed to {follower}", extra={'node_id': self.node_id})
+                # else:
+                #     logging.warning(f"Data replication failed to {follower}", extra={'node_id': self.node_id})
             except grpc.RpcError as e:
                 logging.error(f"Failed to replicate data store to follower {follower}", extra={'node_id': self.node_id})
 
         # Check if the majority of followers replicated the data_store
-        return success_count >= 2
+        return success_count >= self.get_majority_count()-1 #//paarth
 
     def AddSession(self, request, context):
         """Add session (token and username) received from the leader."""
@@ -494,7 +600,6 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         return lms_pb2.StatusResponse(success=True)
 
     def get_majority_count(self):
-        # total_nodes = self.get_active_nodes()
         total_nodes = len(self.node_addresses)
         return (total_nodes // 2) + 1
 
@@ -526,7 +631,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
         if request.type not in self.data_store:
             self.data_store[request.type] = []
         self.data_store[request.type] = list(request.data)
-        logging.info(f"Updated data store: {self.data_store}", extra={'node_id': self.node_id})
+        # logging.info(f"Updated data store: {self.data_store}", extra={'node_id': self.node_id})
         return lms_pb2.StatusResponse(success=True, message="Data store replicated successfully")
 
     def getLLMAnswer(self, request, context):
@@ -592,7 +697,7 @@ class LMSRaftServiceServicer(lms_pb2_grpc.LMSRaftServiceServicer):
                     raise  # Re-raise the exception after all retries are exhausted
 
 def serve(node_id, ip, port):
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=20))
     raft_servicer = LMSRaftServiceServicer(node_id, port)
 
     lms_pb2_grpc.add_LMSRaftServiceServicer_to_server(raft_servicer, server)
